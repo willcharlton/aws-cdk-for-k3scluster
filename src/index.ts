@@ -105,6 +105,9 @@ export class Cluster extends cdk.Construct {
     /// also ingress traffic - ssh (bastion style) or 6443 - should come from the control plane node only
     k3sworkersg.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(22), 'SSH');
     k3sworkersg.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(6443), 'K3s port');
+    if (scope.node.tryGetContext('allow_controlplane_ip_traffic') === '1') {
+        k3scontrolplanesg.connections.allowFrom(k3sworkersg, ec2.Port.allTraffic(), 'K3s Worker to Control Plane Communication');
+    }
 
     // check if the user requires a particular instance type for workers and control plane
     // if not, the default instance type is used
@@ -114,7 +117,7 @@ export class Cluster extends cdk.Construct {
     // create control plane node
     const k3scontrolplane = new ec2.Instance(this, 'k3s-controlplane', {
       instanceType: this.controlPlaneInstanceType,
-      machineImage: new AmiProvider().amiId,
+      machineImage: new AmiProvider(scope).amiId,
       vpc,
       vpcSubnets: {
         subnets: vpc.publicSubnets,
@@ -122,10 +125,13 @@ export class Cluster extends cdk.Construct {
       instanceName: 'k3s-controlplane',
       securityGroup: k3scontrolplanesg,
     });
-
+    let k3s_url = 'https://github.com/rancher/k3s/releases/download/v1.16.9%2Bk3s1/k3s-arm64';
+    if (scope.node.tryGetContext('use_x86') === '1') {
+        k3s_url = 'https://github.com/rancher/k3s/releases/download/v1.16.9%2Bk3s1/k3s';
+    }
     k3scontrolplane.addUserData(`
        #!/bin/bash
-       curl -L -o k3s https://github.com/rancher/k3s/releases/download/v1.16.9%2Bk3s1/k3s-arm64
+       curl -L -o k3s ${k3s_url}
        chmod +x k3s
        ./k3s server &
        sleep 30
@@ -141,11 +147,15 @@ export class Cluster extends cdk.Construct {
 
     // create launch template for worker ASG
     // prepare the userData
+    k3s_url = 'https://github.com/rancher/k3s/releases/download/v1.16.13%2Bk3s1/k3s-arm64';
+    if (scope.node.tryGetContext('use_x86') === '1') {
+        k3s_url = 'https://github.com/rancher/k3s/releases/download/v1.16.13%2Bk3s1/k3s';
+    }
     const userData = ec2.UserData.forLinux();
     userData.addCommands(`
           #!/bin/bash
           LOGFILE='/var/log/k3s.log'
-          curl -L -o k3s https://github.com/rancher/k3s/releases/download/v1.16.13%2Bk3s1/k3s-arm64
+          curl -L -o k3s ${k3s_url}
           chmod +x k3s
           echo the bucket name is ${k3sBucket.bucketName} 
           aws s3 cp s3://${k3sBucket.bucketName}/node-token /node-token 
@@ -156,7 +166,7 @@ export class Cluster extends cdk.Construct {
     // create worker ASG
     const workerAsg = new autoscaling.AutoScalingGroup(this, 'WorkerAsg', {
       instanceType: this.workerInstanceType,
-      machineImage: new AmiProvider().amiId,
+      machineImage: new AmiProvider(scope).amiId,
       vpc,
       vpcSubnets: {
         subnetType: ec2.SubnetType.PUBLIC,
@@ -167,7 +177,7 @@ export class Cluster extends cdk.Construct {
     const cfnInstanceProfile = workerAsg.node.tryFindChild('InstanceProfile') as iam.CfnInstanceProfile;
     const lt = new ec2.CfnLaunchTemplate(this, 'WorkerLaunchTemplate', {
       launchTemplateData: {
-        imageId: new AmiProvider().amiId.getImage(this).imageId,
+        imageId: new AmiProvider(scope).amiId.getImage(this).imageId,
         instanceType: this.workerInstanceType.toString(),
         instanceMarketOptions: {
           marketType: props.spotWorkerNodes ? 'spot' : undefined,
@@ -208,12 +218,20 @@ export class Cluster extends cdk.Construct {
 }
 
 /**
- * The AMI provider to get the latest Amazon Linux 2 AMI for ARM64
+ * The AMI provider to get the latest Amazon Linux 2 AMI for ARM64 or x86_64
  */
 export class AmiProvider {
+  scope: cdk.Construct;
+  constructor(scope: cdk.Construct) {
+      this.scope = scope;
+  }
   public get amiId() {
+    let cpuType = ec2.AmazonLinuxCpuType.ARM_64;
+    if (this.scope.node.tryGetContext('use_x86') === '1') {
+        cpuType = ec2.AmazonLinuxCpuType.X86_64;
+    }
     return ec2.MachineImage.latestAmazonLinux({
-      cpuType: ec2.AmazonLinuxCpuType.ARM_64,
+      cpuType: cpuType,
       generation: ec2.AmazonLinuxGeneration.AMAZON_LINUX_2,
     });
   }

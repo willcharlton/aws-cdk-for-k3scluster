@@ -163,6 +163,10 @@ $ cdk deploy
 
 If you want to deploy in an existing VPC use either `cdk deploy --context use_default_vpc=1` or `cdk deploy --context use_vpc_id=<vpc id>`
 
+If you want to allow ingress traffic from workers to the control-plane instance, use `cdk deploy --context allow_controlplane_ip_traffic=1`.
+
+If you want to use `x86_64` AMIs as opposed to `ARM_64` (default), use `cdk deploy --context use_x86=1`.
+
 ### Clean up 
 
 Cleaning up the environment is as easy as running `cdk destroy` from where you left your prompt. 
@@ -173,8 +177,6 @@ Cleaning up the environment is as easy as running `cdk destroy` from where you l
 * First and foremost this is a learning experiment. We have done limited tests with it. 
 
 * We have not tested this beyond a mere `kubectl get nodes` test. Let alone trying anything like [arkade](https://github.com/alexellis/arkade) 
-
-* `cdk-k3s-cluster` only deploys Arm-based instances. It would be trivial to add x86 based instances support but it's not there today 
 
 * All the control plane and worker nodes are deployed in public subnets and the SGs are fairly permissive in terms of "source". Picking private subnets would have probably broken the use case of deploying into the `default` VPC (which is handy). This prototype over-indexes more on deployment convenience and ease of use than on best practices. Be mindful of that
 
